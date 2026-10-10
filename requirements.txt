@@ -1,0 +1,32 @@
+# ============================================================
+# Perfect Engine — single requirements file (Windows-safe, no compiler)
+# Install:  pip install -r requirements.txt
+# Python:   3.10 / 3.11 (3.11 recommended)
+# ============================================================
+# Everything here is wheel-installable on clean Windows (no CMake,
+# no VS Build Tools, no torch, no Rust). LLMs are cloud-only via the
+# DB-driven LiteLLM gateway (Gemini / Groq / OpenRouter :free /
+# GitHub Models / OpenAI / custom OpenAI-compatible), which talks through
+# the pinned openai + httpx clients below.
+
+fastapi==0.104.1
+uvicorn==0.24.0
+motor==3.3.2
+pymongo==4.6.0
+pydantic==2.5.0
+python-dotenv==1.0.0
+httpx==0.25.2
+redis==5.0.8
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1
+prometheus-client==0.21.0
+
+# OpenAI-compatible client for the cloud LLM gateway
+# (LLM_PROVIDER=litellm|openai). Pinned: newer openai releases pull
+# Rust/sdist builds on Windows.
+openai==1.12.0
+
+# --- Test / dev (lightweight wheels, safe in base) ---
+pytest==8.3.4
+pytest-asyncio==0.24.0

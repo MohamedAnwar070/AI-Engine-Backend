@@ -1,0 +1,119 @@
+{
+  "version": 2,
+  "kind": "perfect_engine_project",
+  "exported_at": "2026-10-10T00:00:00+00:00",
+  "meta": {
+    "format": "perfect_engine_package_v2",
+    "demo": "CityCare Hospital Assistant (HTTP) — engine holds config only; rows live in the hospital business API"
+  },
+  "project": {
+    "name": "CityCare Hospital Assistant",
+    "description": "Patient-facing hospital assistant: find doctors, check schedules, book appointments with token numbers, check token status, and cancel appointments. Business data is served by the hospital API; this project holds orchestration config only.",
+    "llm_prompt": "You are the CityCare Hospital patient assistant. Be warm, concise, and precise. You never diagnose, prescribe, or predict outcomes.\n\nSYMPTOM ROUTING (act immediately, do not interrogate first):\n- Map the patient's words to a specialty and call SearchDoctors AT ONCE with it: leg/knee/ankle/foot/back/joint pain or swelling -> Orthopedics; chest pain/pressure, palpitations -> Cardiology; fever/cold/cough/body ache -> General Medicine; child/baby -> Pediatrics; skin/rash/itching -> Dermatology; headache/seizure/numbness/dizziness -> Neurology.\n- Always add one short safety line (you cannot give medical advice; severe/sudden symptoms or swelling, numbness, chest pain, breathing trouble -> seek emergency care now).\n- After showing doctors, offer the next step in the SAME reply when possible: ask which doctor and date, or directly check slots when doctor and date are known.\n\nServices and the tool for each:\n1. Greeting / list services -> HospitalServices (no inputs needed).\n2. Find doctors by symptom, specialty, or name -> SearchDoctors (specialty and/or name; either may be empty).\n3. Doctor timings / slots on a date -> GetDoctorSchedule (doctor_id like DOC001, date like 2026-10-11).\n4. Book appointment / get token -> BookAppointment (patient_name, phone, doctor_id, date, slot). Ask for any missing field before calling.\n5. Token enquiry / queue status / waiting time -> CheckTokenStatus (token_no like T-1003). NEVER invent a status; always call the tool.\n6. Cancel appointment / cancel token -> CancelAppointment (token_no).\n\nEngine rules:\n1. Prefer native function calling; the tools above are your only data source.\n2. Only call a tool when its required parameters are known; otherwise ask the user for exactly what is missing.\n3. After a TOOL RESULT, answer using ONLY that result. Never invent doctors, slots, tokens, or statuses.\n4. Dates: accept natural dates (today, tomorrow) but always send YYYY-MM-DD to tools.",
+    "llm_config": {
+      "model_name": "gpt-4o-mini",
+      "temperature": 0.3,
+      "max_tokens": 1024,
+      "top_p": 0.9,
+      "top_k": 40
+    }
+  },
+  "nodes": [
+    {
+      "name": "HospitalServices",
+      "description": "Shows welcome message and hospital services when user says hi hello hey what can you do help services list. ALWAYS call this for greetings instead of answering from memory.",
+      "node_schema": { "inputs": {}, "outputs": { "welcome_message": "string", "services": "array" } },
+      "runtime": "http",
+      "tool_code": "",
+      "http_config": {
+        "method": "GET",
+        "url": "{{env:HOSPITAL_API_BASE_URL}}/meta/services",
+        "headers": { "X-API-Key": "{{env:HOSPITAL_API_KEY}}" },
+        "body_template": {}
+      },
+      "is_root": true,
+      "dependencies": []
+    },
+    {
+      "name": "SearchDoctors",
+      "description": "Search hospital doctors by symptom specialty cardiology orthopedics pediatrics neurology general dermatology or by doctor name. ALWAYS call this immediately when the user mentions any symptom or asks for doctors — map leg knee back joint pain to Orthopedics first, never ask which specialty before searching.",
+      "node_schema": { "inputs": { "specialty": "string", "name": "string" }, "outputs": { "doctors": "array", "total_found": "number" } },
+      "runtime": "http",
+      "tool_code": "",
+      "http_config": {
+        "method": "GET",
+        "url": "{{env:HOSPITAL_API_BASE_URL}}/doctors",
+        "headers": { "X-API-Key": "{{env:HOSPITAL_API_KEY}}" },
+        "body_template": { "specialty": "{{specialty}}", "name": "{{name}}" }
+      },
+      "is_root": false,
+      "dependencies": []
+    },
+    {
+      "name": "GetDoctorSchedule",
+      "description": "Get a doctor's available appointment slots for a date using doctor_id and date. ALWAYS call this when the user asks for timings slots availability or when a schedule is needed before booking.",
+      "node_schema": { "inputs": { "doctor_id": "string", "date": "string" }, "outputs": { "slots": "array", "available_count": "number" } },
+      "runtime": "http",
+      "tool_code": "",
+      "http_config": {
+        "method": "GET",
+        "url": "{{env:HOSPITAL_API_BASE_URL}}/doctors/{{doctor_id}}/schedule",
+        "headers": { "X-API-Key": "{{env:HOSPITAL_API_KEY}}" },
+        "body_template": { "date": "{{date}}" }
+      },
+      "is_root": false,
+      "dependencies": ["SearchDoctors"]
+    },
+    {
+      "name": "BookAppointment",
+      "description": "Book a doctor appointment and issue a token number. ALWAYS call this when the user wants to book an appointment or get a token — requires patient_name phone doctor_id date slot. Ask for any missing field first.",
+      "node_schema": { "inputs": { "patient_name": "string", "phone": "string", "doctor_id": "string", "date": "string", "slot": "string" }, "outputs": { "token_no": "string", "status": "string" } },
+      "runtime": "http",
+      "tool_code": "",
+      "http_config": {
+        "method": "POST",
+        "url": "{{env:HOSPITAL_API_BASE_URL}}/appointments",
+        "headers": { "X-API-Key": "{{env:HOSPITAL_API_KEY}}" },
+        "body_template": {
+          "patient_name": "{{patient_name}}",
+          "phone": "{{phone}}",
+          "doctor_id": "{{doctor_id}}",
+          "date": "{{date}}",
+          "slot": "{{slot}}"
+        }
+      },
+      "is_root": false,
+      "dependencies": ["SearchDoctors", "GetDoctorSchedule"]
+    },
+    {
+      "name": "CheckTokenStatus",
+      "description": "Check hospital token status queue position and waiting time using token_no. Tokens live in the hospital database. ALWAYS call this for any token enquiry and NEVER invent a status.",
+      "node_schema": { "inputs": { "token_no": "string" }, "outputs": { "status": "string", "queue_position": "number" } },
+      "runtime": "http",
+      "tool_code": "",
+      "http_config": {
+        "method": "GET",
+        "url": "{{env:HOSPITAL_API_BASE_URL}}/tokens/{{token_no}}",
+        "headers": { "X-API-Key": "{{env:HOSPITAL_API_KEY}}" },
+        "body_template": {}
+      },
+      "is_root": false,
+      "dependencies": []
+    },
+    {
+      "name": "CancelAppointment",
+      "description": "Cancel a booked hospital appointment token using token_no. ALWAYS call this when the user wants to cancel an appointment or token.",
+      "node_schema": { "inputs": { "token_no": "string" }, "outputs": { "status": "string" } },
+      "runtime": "http",
+      "tool_code": "",
+      "http_config": {
+        "method": "POST",
+        "url": "{{env:HOSPITAL_API_BASE_URL}}/tokens/{{token_no}}/cancel",
+        "headers": { "X-API-Key": "{{env:HOSPITAL_API_KEY}}" },
+        "body_template": {}
+      },
+      "is_root": false,
+      "dependencies": ["CheckTokenStatus"]
+    }
+  ]
+}
