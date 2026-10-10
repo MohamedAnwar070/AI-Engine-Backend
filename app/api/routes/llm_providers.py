@@ -2,7 +2,7 @@ from typing import List
 
 from fastapi import APIRouter, Depends
 
-from app.auth import require_roles
+from app.auth import Principal, require_permission
 from app.core.llm_catalog import get_catalog
 from app.schemas import (
     LLMProviderCreate,
@@ -30,7 +30,9 @@ router = APIRouter(tags=["llm-providers"])
 
 
 @router.get("/api/llm-providers/catalog")
-async def llm_catalog_route():
+async def llm_catalog_route(
+    _: Principal = Depends(require_permission("providers:read")),
+):
     """Static presets (Gemini/Groq/OpenRouter/GitHub/OpenAI/custom) + doc links.
 
     Free-tier numbers are NOT hardcoded here — they change per account/region.
@@ -40,26 +42,33 @@ async def llm_catalog_route():
 
 
 @router.get("/api/llm-providers", response_model=List[LLMProviderResponse])
-async def list_llm_providers_route() -> List[LLMProviderResponse]:
+async def list_llm_providers_route(
+    _: Principal = Depends(require_permission("providers:read")),
+) -> List[LLMProviderResponse]:
     return await list_llm_providers()
 
 
 @router.post("/api/llm-providers", response_model=LLMProviderResponse)
 async def create_llm_provider_route(
-    payload: LLMProviderCreate, _: dict = Depends(require_roles("admin", "editor"))
+    payload: LLMProviderCreate,
+    _: Principal = Depends(require_permission("providers:manage")),
 ) -> LLMProviderResponse:
     return await create_llm_provider(payload)
 
 
 @router.post("/api/llm-providers/test-connection", response_model=LLMProviderTestResponse)
 async def test_unsaved_llm_provider_route(
-    payload: LLMProviderCreate, _: dict = Depends(require_roles("admin", "editor"))
+    payload: LLMProviderCreate,
+    _: Principal = Depends(require_permission("providers:manage")),
 ) -> LLMProviderTestResponse:
     return await test_unsaved_llm_config(payload)
 
 
 @router.get("/api/llm-providers/{provider_id}", response_model=LLMProviderResponse)
-async def get_llm_provider_route(provider_id: str) -> LLMProviderResponse:
+async def get_llm_provider_route(
+    provider_id: str,
+    _: Principal = Depends(require_permission("providers:read")),
+) -> LLMProviderResponse:
     return await get_llm_provider(provider_id)
 
 
@@ -67,14 +76,15 @@ async def get_llm_provider_route(provider_id: str) -> LLMProviderResponse:
 async def update_llm_provider_route(
     provider_id: str,
     payload: LLMProviderUpdate,
-    _: dict = Depends(require_roles("admin", "editor")),
+    _: Principal = Depends(require_permission("providers:manage")),
 ) -> LLMProviderResponse:
     return await update_llm_provider(provider_id, payload)
 
 
 @router.delete("/api/llm-providers/{provider_id}")
 async def delete_llm_provider_route(
-    provider_id: str, _: dict = Depends(require_roles("admin"))
+    provider_id: str,
+    _: Principal = Depends(require_permission("providers:manage")),
 ):
     await delete_llm_provider(provider_id)
     return {"message": "LLM provider deleted"}
@@ -82,21 +92,24 @@ async def delete_llm_provider_route(
 
 @router.post("/api/llm-providers/{provider_id}/set-default", response_model=LLMProviderResponse)
 async def set_default_llm_provider_route(
-    provider_id: str, _: dict = Depends(require_roles("admin", "editor"))
+    provider_id: str,
+    _: Principal = Depends(require_permission("providers:manage")),
 ) -> LLMProviderResponse:
     return await set_default_llm_provider(provider_id)
 
 
 @router.post("/api/llm-providers/{provider_id}/test", response_model=LLMProviderTestResponse)
 async def test_llm_provider_route(
-    provider_id: str, _: dict = Depends(require_roles("admin", "editor"))
+    provider_id: str,
+    _: Principal = Depends(require_permission("providers:manage")),
 ) -> LLMProviderTestResponse:
     return await test_llm_provider(provider_id)
 
 
 @router.get("/api/llm-providers/{provider_id}/models")
 async def list_llm_provider_models_route(
-    provider_id: str, _: dict = Depends(require_roles("admin", "editor"))
+    provider_id: str,
+    _: Principal = Depends(require_permission("providers:read")),
 ):
     """Discover model ids from a custom OpenAI-compatible endpoint."""
     from app.services_llm_providers import list_models_for_provider
@@ -105,7 +118,10 @@ async def list_llm_provider_models_route(
 
 
 @router.get("/api/llm-providers/{provider_id}/projects", response_model=List[ProjectResponse])
-async def list_llm_provider_projects_route(provider_id: str) -> List[ProjectResponse]:
+async def list_llm_provider_projects_route(
+    provider_id: str,
+    _: Principal = Depends(require_permission("providers:read")),
+) -> List[ProjectResponse]:
     """Projects pinned to this provider (their chat uses ONLY this provider)."""
     return await list_provider_projects(provider_id)
 
@@ -114,7 +130,7 @@ async def list_llm_provider_projects_route(provider_id: str) -> List[ProjectResp
 async def bind_llm_provider_project_route(
     provider_id: str,
     payload: LLMProviderProjectBinding,
-    _: dict = Depends(require_roles("admin", "editor")),
+    _: Principal = Depends(require_permission("providers:manage")),
 ) -> ProjectResponse:
     return await bind_project_to_provider(provider_id, payload.project_api_id)
 
@@ -123,6 +139,6 @@ async def bind_llm_provider_project_route(
 async def unbind_llm_provider_project_route(
     provider_id: str,
     project_api_id: str,
-    _: dict = Depends(require_roles("admin", "editor")),
+    _: Principal = Depends(require_permission("providers:manage")),
 ) -> ProjectResponse:
     return await unbind_project_from_provider(provider_id, project_api_id)

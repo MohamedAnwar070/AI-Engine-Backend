@@ -16,7 +16,6 @@ node_versions_collection = db["node_versions"]
 tool_audits_collection = db["tool_audits"]
 prompt_presets_collection = db["prompt_presets"]
 project_templates_collection = db["project_templates"]
-users_collection = db["users"]
 governance_audits_collection = db["governance_audits"]
 llm_providers_collection = db["llm_providers"]
 
@@ -53,11 +52,6 @@ async def ensure_indexes() -> None:
         [("template_id", ASCENDING)],
         unique=True,
         name="project_templates_template_id_idx",
-    )
-    await users_collection.create_index(
-        [("email", ASCENDING)],
-        unique=True,
-        name="users_email_idx",
     )
     await governance_audits_collection.create_index(
         [("created_at", ASCENDING)],

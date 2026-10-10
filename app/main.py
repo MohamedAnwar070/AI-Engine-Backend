@@ -30,6 +30,7 @@ from app.services import (
 configure_logging()
 logger = get_logger(__name__)
 rate_limiter = InMemoryRateLimiter()
+LOGIN_PATH = "/api/auth/login"
 
 
 def build_error_response(
@@ -39,6 +40,7 @@ def build_error_response(
     message: str,
     request_id: str | None,
     details=None,
+    headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     envelope = ErrorEnvelope(
         error=ErrorDetail(
@@ -50,7 +52,9 @@ def build_error_response(
         )
     )
     return JSONResponse(
-        status_code=status_code, content=envelope.model_dump(mode="json")
+        status_code=status_code,
+        content=envelope.model_dump(mode="json"),
+        headers=headers,
     )
 
 
@@ -88,16 +92,16 @@ def create_app() -> FastAPI:
         request.state.request_id = request_id
         start_time = time.perf_counter()
 
-        if (
-            Config.RATE_LIMIT_ENABLED
-            and request.url.path.startswith("/api")
-            and not request.url.path.startswith("/api/auth/login")
-        ):
+        if Config.RATE_LIMIT_ENABLED and request.url.path.startswith("/api"):
             client_host = request.client.host if request.client else "unknown"
+            if request.url.path == LOGIN_PATH:
+                limit, window = Config.LOGIN_RATE_LIMIT_ATTEMPTS, Config.LOGIN_RATE_LIMIT_WINDOW_SECONDS
+            else:
+                limit, window = Config.RATE_LIMIT_REQUESTS, Config.RATE_LIMIT_WINDOW_SECONDS
             allowed = await rate_limiter.allow(
                 f"{client_host}:{request.url.path}",
-                Config.RATE_LIMIT_REQUESTS,
-                Config.RATE_LIMIT_WINDOW_SECONDS,
+                limit,
+                window,
             )
             if not allowed:
                 return build_error_response(
@@ -151,12 +155,14 @@ def create_app() -> FastAPI:
                 "error_code": exc.code,
             },
         )
+        headers = {"WWW-Authenticate": "Bearer"} if exc.status_code == 401 else None
         return build_error_response(
             status_code=exc.status_code,
             code=exc.code,
             message=exc.message,
             details=exc.details,
             request_id=request_id,
+            headers=headers,
         )
 
     @app.exception_handler(RequestValidationError)

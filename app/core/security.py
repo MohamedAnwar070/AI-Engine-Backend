@@ -10,6 +10,9 @@ from app.config import Config
 from app.core.errors import InternalServerError
 
 
+ACCESS_TOKEN_TYPE = "access"
+TOKEN_ISSUER = "perfect-engine"
+
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
@@ -18,22 +21,40 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(password, hashed_password)
+    if not hashed_password:
+        return False
+    try:
+        return pwd_context.verify(password, hashed_password)
+    except ValueError:
+        return False
 
 
 def create_access_token(
-    subject: str, role: str, expires_delta: Optional[timedelta] = None
+    subject: str,
+    role: str,
+    expires_delta: Optional[timedelta] = None,
 ) -> str:
     if not Config.JWT_SECRET_KEY:
         raise InternalServerError(
             "JWT secret is not configured", code="jwt_secret_missing"
         )
-
-    expire = datetime.now(timezone.utc) + (
+    now = datetime.now(timezone.utc)
+    expire = now + (
         expires_delta or timedelta(minutes=Config.ACCESS_TOKEN_EXPIRE_MINUTES)
     )
-    payload: Dict[str, Any] = {"sub": subject, "role": role, "exp": expire}
+    payload: Dict[str, Any] = {
+        "sub": subject,
+        "role": role,
+        "typ": ACCESS_TOKEN_TYPE,
+        "iss": TOKEN_ISSUER,
+        "iat": now,
+        "exp": expire,
+    }
     return jwt.encode(payload, Config.JWT_SECRET_KEY, algorithm=Config.JWT_ALGORITHM)
+
+
+class TokenInvalidError(Exception):
+    """Raised when a bearer token is missing, malformed, expired, or forged."""
 
 
 def decode_access_token(token: str) -> Dict[str, Any]:
@@ -42,8 +63,14 @@ def decode_access_token(token: str) -> Dict[str, Any]:
             "JWT secret is not configured", code="jwt_secret_missing"
         )
     try:
-        return jwt.decode(
-            token, Config.JWT_SECRET_KEY, algorithms=[Config.JWT_ALGORITHM]
+        claims = jwt.decode(
+            token,
+            Config.JWT_SECRET_KEY,
+            algorithms=[Config.JWT_ALGORITHM],
+            issuer=TOKEN_ISSUER,
         )
     except JWTError as exc:
-        raise ValueError("Invalid access token") from exc
+        raise TokenInvalidError("Invalid or expired access token") from exc
+    if claims.get("typ") != ACCESS_TOKEN_TYPE or not claims.get("sub"):
+        raise TokenInvalidError("Invalid access token")
+    return claims

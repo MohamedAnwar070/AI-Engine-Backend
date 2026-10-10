@@ -62,12 +62,15 @@ class Config:
     JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "")
     JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
     ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
-    DEFAULT_ADMIN_EMAIL = os.getenv("DEFAULT_ADMIN_EMAIL", "")
-    DEFAULT_ADMIN_PASSWORD = os.getenv("DEFAULT_ADMIN_PASSWORD", "")
-    DEFAULT_ADMIN_NAME = os.getenv("DEFAULT_ADMIN_NAME", "")
+    # Single admin account. The password is never stored: ADMIN_PASSWORD_HASH
+    # is a bcrypt hash produced by scripts/make_admin_hash.py.
+    ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "")
+    ADMIN_PASSWORD_HASH = os.getenv("ADMIN_PASSWORD_HASH", "")
     RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "true"
     RATE_LIMIT_REQUESTS = int(os.getenv("RATE_LIMIT_REQUESTS", "120"))
     RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
+    LOGIN_RATE_LIMIT_ATTEMPTS = int(os.getenv("LOGIN_RATE_LIMIT_ATTEMPTS", "5"))
+    LOGIN_RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("LOGIN_RATE_LIMIT_WINDOW_SECONDS", "300"))
     ALERT_LATENCY_MS_THRESHOLD = float(os.getenv("ALERT_LATENCY_MS_THRESHOLD", "2500"))
     ALERT_ERROR_RATE_THRESHOLD = float(os.getenv("ALERT_ERROR_RATE_THRESHOLD", "15"))
 
@@ -98,26 +101,33 @@ class Config:
 
     @classmethod
     def validate_for_boot(cls) -> None:
-        """Fail closed when production/staging profile is misconfigured."""
-        if not cls.is_production():
-            return
+        """Fail closed on misconfigured auth, and on unsafe production settings."""
         errors = []
-        if not cls.AUTH_ENABLED:
-            errors.append("AUTH_ENABLED must be true in production/staging")
-        if not cls.JWT_SECRET_KEY or len(cls.JWT_SECRET_KEY) < 16:
-            errors.append(
-                "JWT_SECRET_KEY must be set (min 16 chars) in production/staging"
-            )
-        if not cls.REDIS_URL:
-            errors.append("REDIS_URL is required in production/staging")
-        if "*" in cls.ALLOWED_ORIGINS and len(cls.ALLOWED_ORIGINS) == 1:
-            errors.append(
-                "ALLOWED_ORIGINS must not be '*' alone in production/staging"
-            )
+        if cls.AUTH_ENABLED or cls.is_production():
+            if not cls.JWT_SECRET_KEY or len(cls.JWT_SECRET_KEY) < 32:
+                errors.append(
+                    "JWT_SECRET_KEY must be set (min 32 chars) when auth is enabled or in production"
+                )
+        if cls.AUTH_ENABLED:
+            if not cls.ADMIN_EMAIL or "@" not in cls.ADMIN_EMAIL:
+                errors.append("ADMIN_EMAIL must be set when AUTH_ENABLED=true")
+            if not cls.ADMIN_PASSWORD_HASH.startswith("$2"):
+                errors.append(
+                    "ADMIN_PASSWORD_HASH must be a bcrypt hash when AUTH_ENABLED=true"
+                )
+            if cls.ACCESS_TOKEN_EXPIRE_MINUTES < 1:
+                errors.append("ACCESS_TOKEN_EXPIRE_MINUTES must be at least 1")
+        if cls.is_production():
+            if not cls.AUTH_ENABLED:
+                errors.append("AUTH_ENABLED must be true in production/staging")
+            if not cls.REDIS_URL:
+                errors.append("REDIS_URL is required in production/staging")
+            if "*" in cls.ALLOWED_ORIGINS and len(cls.ALLOWED_ORIGINS) == 1:
+                errors.append(
+                    "ALLOWED_ORIGINS must not be '*' alone in production/staging"
+                )
         if errors:
-            raise RuntimeError(
-                "Production configuration invalid:\n- " + "\n- ".join(errors)
-            )
+            raise RuntimeError("Configuration invalid:\n- " + "\n- ".join(errors))
 
     @classmethod
     def display_config(cls):

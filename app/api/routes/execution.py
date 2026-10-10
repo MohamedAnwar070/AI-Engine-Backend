@@ -1,7 +1,8 @@
 from typing import List
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
+from app.auth import Principal, require_permission
 from app.schemas import (
     ExecuteNodeRequest,
     ExecutionHistoryResponse,
@@ -14,7 +15,10 @@ router = APIRouter(tags=["execution"])
 
 
 @router.post("/api/execute-node", response_model=NodeExecutionResponse)
-async def execute_node_route(request: ExecuteNodeRequest) -> NodeExecutionResponse:
+async def execute_node_route(
+    request: ExecuteNodeRequest,
+    _: Principal = Depends(require_permission("executions:run")),
+) -> NodeExecutionResponse:
     return await execute_named_node(
         request.project_api_id,
         request.node_name,
@@ -32,5 +36,6 @@ async def execute_node_route(request: ExecuteNodeRequest) -> NodeExecutionRespon
 async def list_execution_history_route(
     project_api_id: str,
     limit: int = Query(default=50, ge=1, le=200),
+    _: Principal = Depends(require_permission("executions:read")),
 ) -> List[ExecutionHistoryResponse]:
     return await list_execution_history(project_api_id, limit=limit)

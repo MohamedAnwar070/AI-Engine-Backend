@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 from bson import ObjectId
 
 from app.config import Config
-from app.auth import ensure_default_admin, write_governance_audit
+from app.auth import write_governance_audit
 from app.core.errors import InternalServerError, NotFoundError
 from app.core.logging import get_logger
 from app.core.orchestration import build_orchestration_backend
@@ -300,16 +300,6 @@ async def startup_background_services() -> None:
             extra={
                 "event": "mongodb_index_setup_failed",
                 "error_code": "mongodb_index_setup_failed",
-            },
-        )
-    try:
-        await ensure_default_admin()
-    except Exception:
-        logger.exception(
-            "Failed to ensure default admin",
-            extra={
-                "event": "default_admin_setup_failed",
-                "error_code": "default_admin_setup_failed",
             },
         )
     try:

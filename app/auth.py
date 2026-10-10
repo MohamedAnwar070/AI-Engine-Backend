@@ -1,50 +1,66 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
-from bson import ObjectId
-from fastapi import Depends, Request
+from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from bson import ObjectId
 
 from app.config import Config
-from app.core.errors import NotFoundError
+from app.core.errors import AuthenticationError, BadRequestError, PermissionDeniedError
+from app.core.permissions import (
+    DEFAULT_ROLE,
+    ROLE_PERMISSIONS,
+    assert_known_permission,
+    effective_permissions,
+    role_has_permission,
+)
 from app.core.security import (
+    TokenInvalidError,
     create_access_token,
     decode_access_token,
-    hash_password,
     verify_password,
 )
-from app.database import governance_audits_collection, users_collection
-from app.schemas import AuthLoginRequest, TokenResponse, UserCreate, UserResponse
+from app.database import governance_audits_collection
+from app.schemas import AuthLoginRequest, TokenResponse, UserResponse
 
+
+ADMIN_SUBJECT = "admin"
+SYSTEM_SUBJECT = "system"
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
-def _serialize(document):
-    if not document:
-        return None
-    output = dict(document)
-    output["_id"] = str(output["_id"])
-    output.pop("password_hash", None)
-    if isinstance(output.get("created_at"), datetime):
-        output["created_at"] = output["created_at"].isoformat()
-    return output
+@dataclass(frozen=True)
+class Principal:
+    subject: str
+    email: str
+    role: str
+
+
+def to_user_response(principal: Principal) -> UserResponse:
+    return UserResponse(
+        user_id=principal.subject,
+        email=principal.email,
+        role=principal.role,
+        permissions=sorted(effective_permissions(principal.role)),
+    )
 
 
 async def write_governance_audit(
     action: str,
     resource_type: str,
     resource_id: Optional[str] = None,
-    actor: Optional[dict] = None,
+    actor: Optional[Principal] = None,
     details: Optional[dict] = None,
 ) -> None:
     await governance_audits_collection.insert_one(
         {
             "audit_id": f"gaudit_{ObjectId()}",
-            "actor_user_id": actor.get("user_id") if actor else None,
-            "actor_email": actor.get("email") if actor else None,
+            "actor_user_id": actor.subject if actor else None,
+            "actor_email": actor.email if actor else None,
             "action": action,
             "resource_type": resource_type,
             "resource_id": resource_id,
@@ -54,131 +70,81 @@ async def write_governance_audit(
     )
 
 
-async def ensure_default_admin() -> None:
+async def login_admin(credentials: AuthLoginRequest) -> TokenResponse:
     if not Config.AUTH_ENABLED:
-        return
-    if not (
-        Config.DEFAULT_ADMIN_EMAIL
-        and Config.DEFAULT_ADMIN_PASSWORD
-        and Config.DEFAULT_ADMIN_NAME
-    ):
-        return
-    existing = await users_collection.find_one(
-        {"email": Config.DEFAULT_ADMIN_EMAIL.lower()}
-    )
-    if existing:
-        await users_collection.update_one(
-            {"_id": existing["_id"]},
-            {
-                "$set": {
-                    "full_name": Config.DEFAULT_ADMIN_NAME,
-                    "password_hash": hash_password(Config.DEFAULT_ADMIN_PASSWORD),
-                    "role": "admin",
-                    "is_active": True,
-                }
-            },
+        raise BadRequestError(
+            "Authentication is disabled on this engine", code="auth_disabled"
         )
-        return
-    payload = {
-        "user_id": f"user_{ObjectId()}",
-        "email": Config.DEFAULT_ADMIN_EMAIL.lower(),
-        "full_name": Config.DEFAULT_ADMIN_NAME,
-        "password_hash": hash_password(Config.DEFAULT_ADMIN_PASSWORD),
-        "role": "admin",
-        "is_active": True,
-        "created_at": datetime.now(timezone.utc),
-    }
-    await users_collection.insert_one(payload)
-
-
-async def register_user(user: UserCreate, actor: Optional[dict] = None) -> UserResponse:
-    existing = await users_collection.find_one({"email": user.email.lower()})
-    if existing:
-        raise ValueError("User already exists")
-    payload = {
-        "user_id": f"user_{ObjectId()}",
-        "email": user.email.lower(),
-        "full_name": user.full_name,
-        "password_hash": hash_password(user.password),
-        "role": user.role,
-        "is_active": True,
-        "created_at": datetime.now(timezone.utc),
-    }
-    result = await users_collection.insert_one(payload)
-    payload["_id"] = result.inserted_id
-    await write_governance_audit(
-        "register_user",
-        "user",
-        payload["user_id"],
-        actor=actor,
-        details={"role": user.role},
+    email_matches = (
+        credentials.email.strip().lower() == Config.ADMIN_EMAIL.strip().lower()
     )
-    return UserResponse.model_validate(_serialize(payload))
+    # Always run the hash check so response timing does not reveal whether
+    # the email matched.
+    password_ok = verify_password(credentials.password, Config.ADMIN_PASSWORD_HASH)
+    if not (email_matches and password_ok):
+        raise AuthenticationError(
+            "Invalid email or password", code="invalid_credentials"
+        )
 
-
-async def login_user(credentials: AuthLoginRequest) -> TokenResponse:
-    user = await users_collection.find_one({"email": credentials.email.lower()})
-    if not user or not verify_password(
-        credentials.password, user.get("password_hash", "")
-    ):
-        raise ValueError("Invalid credentials")
-    if not user.get("is_active", True):
-        raise ValueError("User is inactive")
-    token = create_access_token(subject=user["user_id"], role=user["role"])
-    await write_governance_audit("login", "user", user["user_id"], actor=user)
+    principal = Principal(
+        subject=ADMIN_SUBJECT,
+        email=Config.ADMIN_EMAIL.strip().lower(),
+        role=DEFAULT_ROLE,
+    )
+    token = create_access_token(subject=principal.subject, role=principal.role)
+    await write_governance_audit("login", "admin", principal.subject, actor=principal)
     return TokenResponse(
-        access_token=token, user=UserResponse.model_validate(_serialize(user))
+        access_token=token,
+        expires_in=Config.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        user=to_user_response(principal),
     )
 
 
-async def _fetch_user_from_token(
-    credentials: Optional[HTTPAuthorizationCredentials],
-) -> Optional[dict]:
-    if not credentials:
-        return None
-    payload = decode_access_token(credentials.credentials)
-    user = await users_collection.find_one({"user_id": payload.get("sub")})
-    return user
+def _system_principal() -> Principal:
+    return Principal(
+        subject=SYSTEM_SUBJECT,
+        email="system@local",
+        role=DEFAULT_ROLE,
+    )
 
 
-async def get_current_user_optional(
+async def get_current_principal(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
-) -> Optional[dict]:
+) -> Principal:
     if not Config.AUTH_ENABLED:
-        return None
-    if not credentials:
-        return None
-    user = await _fetch_user_from_token(credentials)
-    if not user:
-        raise NotFoundError("Authenticated user not found", code="user_not_found")
-    return user
+        # Local development without auth. validate_for_boot() refuses this
+        # configuration in production and staging.
+        return _system_principal()
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise AuthenticationError("Authentication required", code="auth_required")
+    try:
+        claims = decode_access_token(credentials.credentials)
+    except TokenInvalidError as exc:
+        raise AuthenticationError(str(exc), code="invalid_token") from exc
+
+    role = claims.get("role")
+    if claims.get("sub") != ADMIN_SUBJECT or role not in ROLE_PERMISSIONS:
+        raise AuthenticationError("Invalid access token", code="invalid_token")
+    return Principal(
+        subject=ADMIN_SUBJECT,
+        email=Config.ADMIN_EMAIL.strip().lower(),
+        role=role,
+    )
 
 
-async def get_current_user(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
-) -> dict:
-    if not Config.AUTH_ENABLED:
-        return {
-            "_id": "system",
-            "user_id": "system",
-            "email": "system@local",
-            "role": "admin",
-            "full_name": "System",
-            "is_active": True,
-            "created_at": datetime.now(timezone.utc),
-        }
-    if not credentials:
-        raise ValueError("Authentication required")
-    user = await _fetch_user_from_token(credentials)
-    if not user:
-        raise NotFoundError("Authenticated user not found", code="user_not_found")
-    return user
+def require_permission(permission: str):
+    """Allow the request only when the caller's role grants ``permission``.
 
+    Unknown permission names raise at import time, so a typo in a route
+    cannot silently deny (or open) access.
+    """
+    assert_known_permission(permission)
 
-def require_roles(*roles: str):
-    async def dependency(user: dict = Depends(get_current_user)) -> dict:
-        if Config.AUTH_ENABLED and user.get("role") not in roles:
-            raise PermissionError("Insufficient permissions")
-        return user
+    async def dependency(principal: Principal = Depends(get_current_principal)) -> Principal:
+        if not role_has_permission(principal.role, permission):
+            raise PermissionDeniedError(
+                f"Missing permission: {permission}", code="forbidden"
+            )
+        return principal
 
     return dependency

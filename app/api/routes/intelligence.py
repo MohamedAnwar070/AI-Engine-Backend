@@ -2,7 +2,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query
 
-from app.auth import require_roles
+from app.auth import Principal, require_permission
 from app.schemas import (
     ControlPlaneOverviewResponse,
     ConversationRecoveryResponse,
@@ -41,13 +41,16 @@ router = APIRouter(tags=["intelligence"])
 
 
 @router.get("/api/templates/projects", response_model=List[ProjectTemplateResponse])
-async def list_project_templates_route() -> List[ProjectTemplateResponse]:
+async def list_project_templates_route(
+    _: Principal = Depends(require_permission("templates:read")),
+) -> List[ProjectTemplateResponse]:
     return await list_project_templates()
 
 
 @router.post("/api/templates/projects", response_model=ProjectTemplateResponse)
 async def create_project_template_route(
-    template: ProjectTemplateCreate, _: dict = Depends(require_roles("admin", "editor"))
+    template: ProjectTemplateCreate,
+    _: Principal = Depends(require_permission("templates:write")),
 ) -> ProjectTemplateResponse:
     return await create_project_template(template)
 
@@ -58,7 +61,7 @@ async def create_project_template_route(
 async def update_project_template_route(
     template_id: str,
     template: ProjectTemplateUpdate,
-    _: dict = Depends(require_roles("admin", "editor")),
+    _: Principal = Depends(require_permission("templates:write")),
 ) -> ProjectTemplateResponse:
     return await update_project_template(template_id, template)
 
@@ -66,7 +69,10 @@ async def update_project_template_route(
 @router.get(
     "/api/projects/{project_api_id}/presets", response_model=List[PromptPresetResponse]
 )
-async def list_prompt_presets_route(project_api_id: str) -> List[PromptPresetResponse]:
+async def list_prompt_presets_route(
+    project_api_id: str,
+    _: Principal = Depends(require_permission("presets:read")),
+) -> List[PromptPresetResponse]:
     return await list_prompt_presets(project_api_id)
 
 
@@ -76,25 +82,34 @@ async def list_prompt_presets_route(project_api_id: str) -> List[PromptPresetRes
 async def create_prompt_preset_route(
     project_api_id: str,
     preset: PromptPresetCreate,
-    _: dict = Depends(require_roles("admin", "editor")),
+    _: Principal = Depends(require_permission("presets:write")),
 ) -> PromptPresetResponse:
     return await create_prompt_preset(project_api_id, preset)
 
 
 @router.get("/api/nodes/{node_id}/versions", response_model=List[NodeVersionResponse])
-async def list_node_versions_route(node_id: str) -> List[NodeVersionResponse]:
+async def list_node_versions_route(
+    node_id: str,
+    _: Principal = Depends(require_permission("nodes:read")),
+) -> List[NodeVersionResponse]:
     return await list_node_versions(node_id)
 
 
 @router.get("/api/projects/{project_api_id}/graph", response_model=NodeGraphResponse)
-async def get_project_graph_route(project_api_id: str) -> NodeGraphResponse:
+async def get_project_graph_route(
+    project_api_id: str,
+    _: Principal = Depends(require_permission("nodes:read")),
+) -> NodeGraphResponse:
     return await get_project_graph(project_api_id)
 
 
 @router.get(
     "/api/projects/{project_api_id}/simulate", response_model=SimulationResponse
 )
-async def simulate_project_route(project_api_id: str) -> SimulationResponse:
+async def simulate_project_route(
+    project_api_id: str,
+    _: Principal = Depends(require_permission("projects:test")),
+) -> SimulationResponse:
     return await simulate_project_graph(project_api_id)
 
 
@@ -104,7 +119,7 @@ async def simulate_project_route(project_api_id: str) -> SimulationResponse:
 async def replay_execution_route(
     execution_id: str,
     request: ReplayExecutionRequest,
-    _: dict = Depends(require_roles("admin", "editor")),
+    _: Principal = Depends(require_permission("executions:replay")),
 ) -> NodeExecutionResponse:
     return await replay_execution(execution_id, request)
 
@@ -113,7 +128,9 @@ async def replay_execution_route(
     "/api/projects/{project_api_id}/audits", response_model=List[ToolAuditResponse]
 )
 async def list_tool_audits_route(
-    project_api_id: str, limit: int = Query(default=100, ge=1, le=200)
+    project_api_id: str,
+    limit: int = Query(default=100, ge=1, le=200),
+    _: Principal = Depends(require_permission("monitoring:read")),
 ) -> List[ToolAuditResponse]:
     return await list_tool_audits(project_api_id, limit=limit)
 
@@ -123,24 +140,31 @@ async def list_tool_audits_route(
     response_model=ConversationRecoveryResponse,
 )
 async def recover_conversation_route(
-    project_api_id: str, session_id: Optional[str] = None
+    project_api_id: str,
+    session_id: Optional[str] = None,
+    _: Principal = Depends(require_permission("conversations:read")),
 ) -> ConversationRecoveryResponse:
     return await recover_conversation(project_api_id, session_id)
 
 
 @router.get("/api/control-plane/overview", response_model=ControlPlaneOverviewResponse)
-async def control_plane_overview_route() -> ControlPlaneOverviewResponse:
+async def control_plane_overview_route(
+    _: Principal = Depends(require_permission("monitoring:read")),
+) -> ControlPlaneOverviewResponse:
     return await get_control_plane_overview()
 
 
 @router.get("/api/governance/audits", response_model=List[GovernanceAuditResponse])
 async def governance_audits_route(
     limit: int = Query(default=200, ge=1, le=500),
-    _: dict = Depends(require_roles("admin")),
+    _: Principal = Depends(require_permission("governance:read")),
 ) -> List[GovernanceAuditResponse]:
     return await list_governance_audits(limit=limit)
 
 
 @router.post("/api/alerts/webhook")
-async def alerts_webhook_route(payload: dict):
+async def alerts_webhook_route(
+    payload: dict,
+    _: Principal = Depends(require_permission("alerts:receive")),
+):
     return await receive_alert_webhook(payload)

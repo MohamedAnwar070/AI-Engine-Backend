@@ -28,6 +28,28 @@ class NotFoundError(AppError):
         super().__init__(message, code=code, status_code=404, details=details)
 
 
+class AuthenticationError(AppError):
+    def __init__(
+        self,
+        message: str = "Authentication required",
+        *,
+        code: str = "unauthorized",
+        details: Optional[Any] = None,
+    ) -> None:
+        super().__init__(message, code=code, status_code=401, details=details)
+
+
+class PermissionDeniedError(AppError):
+    def __init__(
+        self,
+        message: str = "Insufficient permissions",
+        *,
+        code: str = "forbidden",
+        details: Optional[Any] = None,
+    ) -> None:
+        super().__init__(message, code=code, status_code=403, details=details)
+
+
 class BadRequestError(AppError):
     def __init__(
         self, message: str, *, code: str = "bad_request", details: Optional[Any] = None

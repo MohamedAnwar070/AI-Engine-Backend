@@ -584,26 +584,17 @@ class AuthLoginRequest(StrictModel):
     password: str = Field(min_length=8, max_length=200)
 
 
-class UserCreate(StrictModel):
-    email: str = Field(min_length=3, max_length=320)
-    password: str = Field(min_length=8, max_length=200)
-    full_name: str = Field(min_length=1, max_length=200)
-    role: Literal["admin", "editor", "viewer"] = "viewer"
-
-
 class UserResponse(StrictModel):
-    id: str = Field(alias="_id")
     user_id: str
     email: str
-    full_name: str
-    role: Literal["admin", "editor", "viewer"]
-    is_active: bool
-    created_at: datetime
+    role: str
+    permissions: List[str]
 
 
 class TokenResponse(StrictModel):
     access_token: str
     token_type: Literal["bearer"] = "bearer"
+    expires_in: int
     user: UserResponse
 
 
